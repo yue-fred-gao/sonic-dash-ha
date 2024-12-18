@@ -10,7 +10,7 @@ use swbus_proto::swbus::*;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::*;
 
 pub(crate) enum SwbusConnControlMessage {
     Shutdown,
@@ -48,12 +48,16 @@ where
         }
     }
 
+    #[instrument(name="ConnWorker", skip(self), fields(conn_id=self.info.id()))]
     pub async fn run(&mut self) -> Result<()> {
+        info!("Starting connection worker");
         self.register_to_mux()?;
         let result = self.run_worker_loop().await;
         //unregister from mux
+        info!("Unregistering from mux.");
         self.unregister_from_mux()?;
         if result.is_err() {
+            info!("Reporting connection lost.");
             self.conn_store.conn_lost(self.info.clone());
         }
         result
@@ -115,12 +119,13 @@ where
         Ok(())
     }
 
+    #[instrument(name="receive_msg", level="debug", skip_all, fields(message.id=message.header.as_ref().unwrap().id))]
     async fn process_data_message(&mut self, message: SwbusMessage) -> Result<()> {
+        debug!("{:?}", &message);
         self.validate_message_common(&message)?;
         match message.body {
             Some(swbus_message::Body::TraceRouteRequest(_)) => {
                 println!("Received traceroute request: {:?}", message);
-                //self.process_ping_request(&message);
             }
             _ => {
                 self.mux.route_message(message).await?;

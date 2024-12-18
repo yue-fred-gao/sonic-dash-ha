@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
-
+use tracing::*;
 pub struct SwbusServiceHost {
     swbus_server_addr: String,
     mux: Arc<SwbusMultiplexer>,
@@ -88,6 +88,7 @@ impl SwbusServiceHost {
 impl SwbusService for SwbusServiceHost {
     type StreamMessagesStream = SwbusMessageStream;
 
+    #[instrument(name="connection_received", level="info", skip_all, fields(addr=%request.remote_addr().unwrap()))]
     async fn stream_messages(
         &self,
         request: Request<Streaming<SwbusMessage>>,
@@ -99,12 +100,12 @@ impl SwbusService for SwbusServiceHost {
             Some(path) => match ServicePath::from_string(path.to_str().unwrap()) {
                 Ok(service_path) => service_path,
                 Err(e) => {
-                    println!("SwbusServiceServer::error parsing client service path: {:?}", e);
+                    error!("SwbusServiceServer::error parsing client service path: {:?}", e);
                     return Err(Status::invalid_argument("Invalid client service path"));
                 }
             },
             None => {
-                println!("SwbusServiceServer::client service path not found");
+                error!("SwbusServiceServer::client service path not found");
                 return Err(Status::invalid_argument("Client service path not found"));
             }
         };
@@ -120,15 +121,19 @@ impl SwbusService for SwbusServiceHost {
                 }
             },
             None => {
-                println!("SwbusServiceServer::service path scope not set");
+                error!("SwbusServiceServer::service path scope not set");
                 return Err(Status::invalid_argument("service path scope not set"));
             }
         };
 
         let in_stream = request.into_inner();
+        info!(
+            scope = scope as i32,
+            service_path = service_path.to_longest_path(),
+            "Creating SwbusConn"
+        );
         // outgoing message queue
         let (tx, rx) = mpsc::channel(16);
-
         let conn = SwbusConn::from_incoming_stream(
             conn_type,
             client_addr,
